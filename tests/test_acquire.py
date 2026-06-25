@@ -131,6 +131,20 @@ async def test_acquire_download_failure_is_error_not_abort(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_acquire_emits_progress(tmp_path):
+    client = _FakeOAClient({"10.1/a": OALookup(status="oa",
+                                               location=OALocation(pdf_url="http://x/a.pdf")),
+                            "10.1/b": OALookup(status="closed")})
+    seen = []
+    await acquire_open_access([_ref("1", "10.1/a"), _ref("2", "10.1/b")], tmp_path,
+                             client=client, download=_ok_dl,
+                             on_progress=lambda step, i, n: seen.append((step, i, n)))
+    assert ("parsing", 0, 2) in seen
+    assert ("fetching", 2, 2) in seen          # final completion count
+    assert max(i for s, i, n in seen if s == "fetching") == 2
+
+
+@pytest.mark.asyncio
 async def test_acquire_isolates_locate_exception(tmp_path):
     class _Boom:
         async def locate(self, *, doi, title):

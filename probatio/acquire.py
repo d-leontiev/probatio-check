@@ -96,40 +96,57 @@ def _doi_filename(doi: str | None, key: str) -> str:
 async def acquire_open_access(
     references: list[Reference], refs_dir: Path, *, client: OAClient,
     download: DownloadFn | None = None, max_concurrency: int = 4,
+    on_progress: Callable[[str, int, int], None] | None = None,
 ) -> AcquisitionReport:
     """Locate + fetch the open-access PDF for each reference. Per-reference errors are
-    isolated (one failure never aborts the batch). Returns a classified report."""
+    isolated (one failure never aborts the batch). Returns a classified report.
+
+    `on_progress(step, i, n)` (when given) emits ("parsing", 0, n) once before fetching, then
+    ("fetching", completed, n) as each reference finishes. No-op when None."""
     refs_dir = Path(refs_dir)
     refs_dir.mkdir(parents=True, exist_ok=True)
     dl = download or download_pdf
     existing = {p.name.lower() for p in refs_dir.glob("*.pdf")}
     sem = asyncio.Semaphore(max_concurrency)
     log = logging.getLogger(__name__)
+    n = len(references)
+    done = 0
+    if on_progress is not None:
+        on_progress("parsing", 0, n)
 
     async def one(ref: Reference) -> AcquisitionResult:
-        base = AcquisitionResult(ref_key=ref.key, doi=ref.doi, title=ref.title, status="error")
-        fname = _doi_filename(ref.doi, ref.key)
-        dest = refs_dir / fname
-        if fname.lower() in existing and _is_pdf_file(dest):
-            return base.model_copy(update={"status": "already_present", "pdf_path": str(dest)})
-        async with sem:
-            try:
-                lookup = await client.locate(doi=ref.doi, title=ref.title)
-            except Exception as e:  # noqa: BLE001 - one lookup failure must not abort the batch
-                log.warning("OA lookup failed for ref %s: %s", ref.key, e)
-                return base.model_copy(update={"status": "error", "detail": f"locate: {e}"})
-        if lookup.status == "unresolved":
-            return base.model_copy(update={"status": "not_found"})
-        if lookup.status == "closed":
-            return base.model_copy(update={"status": "paywalled"})
-        if lookup.location is None:   # oa but no usable URL: a client fault, not a paywall
-            return base.model_copy(update={"status": "error",
-                                           "detail": "oa lookup returned no location"})
-        if await dl(lookup.location.pdf_url, dest):
-            return base.model_copy(update={"status": "fetched", "pdf_path": str(dest),
-                                           "source_url": lookup.location.pdf_url})
-        return base.model_copy(update={"status": "error", "detail": "download failed",
-                                       "source_url": lookup.location.pdf_url})
+        nonlocal done
+        try:
+            base = AcquisitionResult(ref_key=ref.key, doi=ref.doi, title=ref.title, status="error")
+            fname = _doi_filename(ref.doi, ref.key)
+            dest = refs_dir / fname
+            if fname.lower() in existing and _is_pdf_file(dest):
+                res = base.model_copy(update={"status": "already_present", "pdf_path": str(dest)})
+            else:
+                async with sem:
+                    try:
+                        lookup = await client.locate(doi=ref.doi, title=ref.title)
+                    except Exception as e:  # noqa: BLE001 - one lookup failure must not abort the batch
+                        log.warning("OA lookup failed for ref %s: %s", ref.key, e)
+                        return base.model_copy(update={"status": "error", "detail": f"locate: {e}"})
+                if lookup.status == "unresolved":
+                    res = base.model_copy(update={"status": "not_found"})
+                elif lookup.status == "closed":
+                    res = base.model_copy(update={"status": "paywalled"})
+                elif lookup.location is None:   # oa but no usable URL: a client fault, not a paywall
+                    res = base.model_copy(update={"status": "error",
+                                                  "detail": "oa lookup returned no location"})
+                elif await dl(lookup.location.pdf_url, dest):
+                    res = base.model_copy(update={"status": "fetched", "pdf_path": str(dest),
+                                                  "source_url": lookup.location.pdf_url})
+                else:
+                    res = base.model_copy(update={"status": "error", "detail": "download failed",
+                                                  "source_url": lookup.location.pdf_url})
+            return res
+        finally:
+            done += 1
+            if on_progress is not None:
+                on_progress("fetching", done, n)
 
     results = list(await asyncio.gather(*(one(r) for r in references)))
     summary: dict[str, int] = {}
