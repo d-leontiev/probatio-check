@@ -328,4 +328,71 @@ async function init() {
   const first = derive()[0]; state.selectedId = first ? first.id : null;
   render();
 }
-init();
+
+// ---- phase-aware bootstrap (launcher → acquire → references → check → audit) ----
+const liveApi = {
+  guard: async () => (await fetch("/api/guard")).json(),
+  status: async () => (await fetch("/api/run-status")).json(),
+  references: async () => (await fetch("/api/references")).json(),
+  acquire: (b) => fetch("/api/acquire", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }),
+  check: () => fetch("/api/check", { method: "POST" }),
+  drop: (fd) => fetch("/api/drop-refs", { method: "POST", body: fd }),
+};
+function show(view) {  // "launcher"|"progress"|"references"|"audit"
+  for (const id of ["launcher", "progress-view", "references-view"]) $(id).hidden = (id.split("-")[0] !== view);
+  const audit = view === "audit";
+  for (const id of ["queue", "detail", "evidence"]) $(id).hidden = !audit;
+  $("topbar").hidden = !audit;
+}
+async function renderGuard() {
+  const g = await liveApi.guard();
+  $("guard-line").innerHTML = g.local
+    ? `<span class="ok">● local — ${esc(g.verify_model)} @ ${esc(g.ollama_api_base)}</span>`
+    : `<span class="bad">● refused — ${esc(g.detail)}</span>`;
+  $("acquire-btn").disabled = !g.local;
+}
+async function renderReferences() {
+  const d = await liveApi.references();
+  $("refs-summary").innerHTML = Object.entries(d.summary).map(([k, v]) => chip(k) + `<b>${v}</b>`).join(" ");
+  $("refs-list").innerHTML = d.results.map((r) =>
+    `<li class="ref-row">${chip(r.status)} <span class="rk">[${esc(r.ref_key)}]</span> <span class="rt">${esc(r.title || r.doi || "")}</span></li>`).join("");
+}
+function wireLauncher() {
+  $("acquire-btn").onclick = async () => {
+    const body = { manuscript_path: $("man-path").value.trim() };
+    const rp = $("refs-path").value.trim(); if (rp) body.refs_dir = rp;
+    const r = await liveApi.acquire(body);
+    if (r.status === 409 || r.status === 400) { $("guard-line").innerHTML = `<span class="bad">${esc((await r.json()).detail || "refused")}</span>`; return; }
+    poll();
+  };
+  const dz = $("drop-zone"), di = $("drop-input");
+  dz.onclick = () => di.click();
+  dz.ondragover = (e) => { e.preventDefault(); dz.classList.add("drag"); };
+  dz.ondragleave = () => dz.classList.remove("drag");
+  dz.ondrop = (e) => { e.preventDefault(); dz.classList.remove("drag"); upload(e.dataTransfer.files); };
+  di.onchange = () => upload(di.files);
+  $("check-btn").onclick = async () => { await liveApi.check(); poll(); };
+}
+async function upload(files) {
+  const fd = new FormData();
+  for (const f of files) fd.append("files", f);
+  const res = await liveApi.drop(fd); const j = await res.json();
+  $("drop-note").textContent = `+${j.added || 0} added`;
+}
+let _pollTimer = null;
+async function poll() {
+  const st = await liveApi.status();
+  if (st.phase === "acquiring" || st.phase === "checking") {
+    show("progress");
+    $("prog-title").textContent = st.phase === "acquiring" ? "Acquiring references…" : "Running check…";
+    $("prog-text").textContent = st.n ? `${st.step} ${st.i}/${st.n}` : st.step;
+    $("prog-fill").style.width = st.n ? `${Math.round(100 * st.i / st.n)}%` : "30%";
+    _pollTimer = setTimeout(poll, 1000); return;
+  }
+  if (st.phase === "awaiting_refs") { show("references"); await renderReferences(); return; }
+  if (st.phase === "error") { show("launcher"); $("guard-line").innerHTML = `<span class="bad">${esc(st.error)}</span>`; return; }
+  if (st.phase === "done") { show("audit"); await init(); return; }
+  show("launcher"); await renderGuard();   // idle
+}
+async function bootstrap() { wire(); wireLauncher(); poll(); }
+bootstrap();

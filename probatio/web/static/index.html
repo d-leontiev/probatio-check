@@ -14,7 +14,28 @@
   <button id="help-btn" class="icon-btn" title="Keyboard help (?)" aria-label="Keyboard help">?</button>
 </header>
 <main id="app">
-  <section id="queue" aria-label="Citations">
+  <section id="launcher" hidden>
+    <div class="launch-card">
+      <h1>Probatio — citation check</h1>
+      <p class="launch-sub">Acquire the open-access references a manuscript cites, drop in the rest, then check.</p>
+      <label>Manuscript PDF (path)<input id="man-path" type="text" placeholder="/path/to/manuscript.pdf"></label>
+      <label>References folder<input id="refs-path" type="text" placeholder="(defaults to &lt;manuscript&gt;-refs)"></label>
+      <div id="guard-line" class="guard"></div>
+      <p class="privacy-note">Step 1 sends only reference DOIs/titles to Unpaywall/OpenAlex. Step 2 (the check) runs fully on this machine.</p>
+      <button id="acquire-btn">Acquire references</button>
+    </div>
+  </section>
+  <section id="progress-view" hidden><div class="prog-card"><h2 id="prog-title">Working…</h2><div class="prog-bar"><div id="prog-fill"></div></div><div id="prog-text">—</div></div></section>
+  <section id="references-view" hidden>
+    <div class="refs-card">
+      <h2>References</h2><div id="refs-summary" class="refs-summary"></div>
+      <ol id="refs-list" class="refs-list"></ol>
+      <div id="drop-zone" class="drop-zone">Drop the missing PDFs here (or click to choose)<input id="drop-input" type="file" accept="application/pdf" multiple hidden></div>
+      <div id="drop-note" class="drop-note"></div>
+      <button id="check-btn">Run check</button>
+    </div>
+  </section>
+  <section id="queue" class="audit-only" aria-label="Citations">
     <div id="filters">
       <div class="presets">
         <button class="preset" data-preset="problems">Problems</button>
@@ -37,8 +58,8 @@
     </div>
     <ol id="rows" aria-label="Citation list"></ol>
   </section>
-  <section id="detail" aria-label="Verdict and reasoning"></section>
-  <aside id="evidence" aria-label="Source evidence"></aside>
+  <section id="detail" class="audit-only" aria-label="Verdict and reasoning"></section>
+  <aside id="evidence" class="audit-only" aria-label="Source evidence"></aside>
 </main>
 <div id="help-overlay" hidden></div>
 <script type="module" src="/static/app.js"></script>

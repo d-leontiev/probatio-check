@@ -331,3 +331,10 @@ def test_check_fail_closed(tmp_path):
     client = TestClient(create_app(Settings(verify_model="claude-haiku-4-5-20251001")))
     # no manuscript set + cloud model: both should refuse; cloud guard first
     assert client.post("/api/check").status_code in (409,)
+
+
+def test_launcher_html_has_views():
+    from probatio.config import Settings
+    client = TestClient(create_app(Settings()))
+    html = client.get("/").text
+    assert 'id="launcher"' in html and 'id="references-view"' in html and 'id="drop-zone"' in html
