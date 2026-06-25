@@ -6,6 +6,7 @@ const LABEL = {
   unsupported: "unsupported", not_found: "not found", not_a_claim: "not a claim",
   no_pdf: "no pdf", ambiguous: "ambiguous", unresolved_marker: "unresolved",
   unreadable_source: "unreadable", unchecked: "unchecked",
+  fetched: "fetched", paywalled: "paywalled", already_present: "already present", error: "error",
 };
 const PROBLEMS = new Set(["unsupported", "overstated", "not_found", "partially"]);
 const ORDER = { unsupported: 0, overstated: 1, not_found: 2, partially: 3,
