@@ -183,6 +183,22 @@ def _build_app(run: RunState) -> FastAPI:
             {"ref_key": r.ref_key, "status": r.status, "doi": r.doi,
              "title": r.title, "pdf_path": r.pdf_path} for r in rows]}
 
+    from fastapi import UploadFile, File
+
+    @app.post("/api/drop-refs")
+    async def drop_refs(files: list[UploadFile] = File(...)):
+        if run.refs_dir is None:
+            raise HTTPException(409, "no refs folder yet — start an acquisition first")
+        added = 0
+        for f in files:
+            data = await f.read()
+            if not data.startswith(b"%PDF"):
+                continue
+            name = Path(f.filename or "ref.pdf").name        # strip any path components
+            (Path(run.refs_dir) / name).write_bytes(data)
+            added += 1
+        return {"added": added}
+
     @app.get("/api/citations")
     def citations():
         rep = _report()

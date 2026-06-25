@@ -17,6 +17,10 @@ def _pdf(path, text):
     doc.close()
 
 
+async def _aiter(v):
+    return v
+
+
 def _report(refs):
     _pdf(refs / "a.pdf", "The melting point is 150 C as reported in our study.")
     p1 = EvidenceContext(id="a::p1::check::0", paper_id="a",
@@ -257,3 +261,28 @@ def test_acquire_rejects_bad_manuscript(tmp_path):
     client = TestClient(create_app(Settings()))
     r = client.post("/api/acquire", json={"manuscript_path": str(tmp_path / "nope.pdf")})
     assert r.status_code == 400
+
+
+def test_drop_refs_after_acquire(tmp_path, monkeypatch):
+    from probatio.config import Settings
+    from probatio.models import Reference, AcquisitionReport
+    pdf = tmp_path / "m.pdf"
+    pdf.write_bytes(b"%PDF-1.7")
+    monkeypatch.setattr("probatio.manuscript.PyMuPDFManuscriptParser.parse_references",
+                        lambda self, p: _aiter([Reference(key="1", raw="1")]))
+    import probatio.web.app as webapp
+
+    async def fake_acquire(refs, refs_dir, *, client, max_concurrency=4, on_progress=None):
+        return AcquisitionReport(results=[], summary={})
+    monkeypatch.setattr(webapp, "acquire_open_access", fake_acquire)
+    monkeypatch.setattr(webapp, "UnpaywallOpenAlexClient", lambda **k: object())
+    client = TestClient(create_app(Settings()))
+    client.post("/api/acquire", json={"manuscript_path": str(pdf)})
+    for _ in range(50):
+        if client.get("/api/run-status").json()["phase"] == "awaiting_refs":
+            break
+    files = [("files", ("Good Paper.pdf", b"%PDF-1.7 body", "application/pdf")),
+             ("files", ("bad.pdf", b"<html>no</html>", "application/pdf"))]
+    r = client.post("/api/drop-refs", files=files)
+    assert r.status_code == 200 and r.json()["added"] == 1
+    assert (pdf.with_name("m-refs") / "Good Paper.pdf").exists()
