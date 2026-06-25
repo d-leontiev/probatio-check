@@ -71,6 +71,37 @@ async def test_download_pdf_handles_fetch_error(tmp_path):
     assert await download_pdf("http://x", tmp_path / "a.pdf", fetch=boom) is False
 
 
+@pytest.mark.asyncio
+async def test_download_pdf_streaming_cap_aborts_early(tmp_path):
+    # A fetch that would yield > max_bytes must be rejected without returning the whole body.
+    chunks_pulled = {"n": 0}
+    async def streaming_fetch(url):
+        # Simulate _http_get_bytes enforcing the cap: yield until over cap then raise.
+        data = bytearray()
+        for _ in range(100):
+            chunks_pulled["n"] += 1
+            data.extend(b"%PDF" + b"x" * 1000)
+            if len(data) > 5000:
+                raise ValueError("exceeds max_bytes")
+        return bytes(data)
+    ok = await download_pdf("http://x/big.pdf", tmp_path / "b.pdf", fetch=streaming_fetch)
+    assert ok is False and not (tmp_path / "b.pdf").exists()
+    assert chunks_pulled["n"] < 100        # aborted early, did not pull everything
+
+
+@pytest.mark.asyncio
+async def test_http_get_bytes_streams_and_caps():
+    import httpx
+    from probatio.acquire import _http_get_bytes
+    big = b"%PDF" + b"x" * 20000
+    def handler(req):
+        return httpx.Response(200, content=big)
+    # max_bytes below the body size -> ValueError, not a full buffer return
+    with pytest.raises(ValueError):
+        await _http_get_bytes("http://x/big.pdf", max_bytes=5000,
+                              transport=httpx.MockTransport(handler))
+
+
 class _FakeOAClient:
     def __init__(self, by_id: dict):
         self.by_id, self.calls = by_id, []

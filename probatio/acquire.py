@@ -34,12 +34,19 @@ _PDF_MAGIC = b"%PDF"
 Fetch = Callable[[str], Awaitable[bytes]]
 
 
-async def _http_get_bytes(url: str, *, timeout: float = 30.0) -> bytes:
+async def _http_get_bytes(url: str, *, timeout: float = 30.0, max_bytes: int = 50_000_000,
+                          transport: object | None = None) -> bytes:
     import httpx
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        return resp.content
+    tx = transport if isinstance(transport, httpx.AsyncBaseTransport) else None
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, transport=tx) as client:
+        async with client.stream("GET", url) as resp:
+            resp.raise_for_status()
+            buf = bytearray()
+            async for chunk in resp.aiter_bytes():
+                buf.extend(chunk)
+                if len(buf) > max_bytes:
+                    raise ValueError(f"exceeds max_bytes ({max_bytes})")
+            return bytes(buf)
 
 
 async def download_pdf(url: str, dest: Path, *, max_bytes: int = 50_000_000,
@@ -48,7 +55,7 @@ async def download_pdf(url: str, dest: Path, *, max_bytes: int = 50_000_000,
     (a bad/oversized/non-PDF download -> False + warning) so one failure cannot abort a batch."""
     log = logging.getLogger(__name__)
     log.info("downloading PDF from %s", url)   # audit: this GET reaches a third (publisher) host
-    getter = fetch or _http_get_bytes
+    getter = fetch or (lambda u: _http_get_bytes(u, max_bytes=max_bytes))
     try:
         data = await getter(url)
     except Exception as e:  # noqa: BLE001 - a failed download is a non-fatal per-ref outcome
