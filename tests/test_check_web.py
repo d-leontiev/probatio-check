@@ -1,6 +1,7 @@
 import fitz
 from fastapi.testclient import TestClient
-from probatio.web.app import create_check_app
+from probatio.web.app import create_check_app, create_app
+from probatio.config import Settings
 from probatio.web.serve import load_check_report
 from probatio.report import write_citation_sidecar
 from probatio.models import (Citation, CitationCheck, CitationReport,
@@ -194,3 +195,16 @@ def test_override_clear_keeps_reviewed(tmp_path):
     c1 = next(c for c in client.get("/api/citations").json()["checks"]
               if c["id"] == "c1:1")
     assert c1["human_override"] is None and c1["reviewed"] is True
+
+
+def test_launcher_serves_index_and_guard(tmp_path):
+    client = TestClient(create_app(Settings()))
+    assert client.get("/").status_code == 200
+    g = client.get("/api/guard").json()
+    assert set(g) >= {"local", "verify_model", "embedding_model", "ollama_api_base"}
+    assert g["local"] is True                 # default Settings are local ollama
+
+
+def test_launcher_status_idle(tmp_path):
+    client = TestClient(create_app(Settings()))
+    assert client.get("/api/run-status").json()["phase"] == "idle"

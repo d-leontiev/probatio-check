@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from probatio.config import Settings, assert_local_only, ConfidentialityError
 from probatio.highlight import PyMuPDFHighlighter
 from probatio.models import CitationReport, CitationVerdict, CitationCheck
 
@@ -29,17 +30,43 @@ class OverrideBody(BaseModel):
     clear_override: bool = False
 
 
-def create_check_app(*, report: CitationReport, refs_dir: str | Path,
-                     out_dir: Optional[Path] = None) -> FastAPI:
+class RunState:
+    """Mutable state for one web run, shared across phases of the two-step flow.
+
+    Phases: idle|acquiring|awaiting_refs|checking|done|error.
+    """
+
+    def __init__(self, settings: Optional[Settings] = None):
+        self.settings = settings
+        self.manuscript: Path | None = None
+        self.refs_dir: Path | None = None
+        self.out_dir: Path | None = None
+        self.acquire_report = None      # AcquisitionReport | None
+        self.check_report: CitationReport | None = None
+        self.phase: str = "idle"        # idle|acquiring|awaiting_refs|checking|done|error
+        self.progress: dict = {"step": "", "i": 0, "n": 0}
+        self.error: str = ""
+
+
+def _build_app(run: RunState) -> FastAPI:
     """Citation-audit UI: problems-first list, click → highlighted source passage + verdict,
-    with human override that persists back to citations.json. Reuses the highlight endpoint."""
+    with human override that persists back to citations.json. Reuses the highlight endpoint.
+
+    All endpoints read mutable state from ``run`` so a single app serves every phase."""
     from probatio.report import _STATUS_ORDER, _status, write_citation_sidecar
     app = FastAPI(title="probatio-check")
     app.mount("/static", StaticFiles(directory=_STATIC), name="static")
-    rdir = Path(refs_dir)
-    _passage = {p.id: (p, chk) for chk in report.checks for p in chk.passages}
     _ALLOWED = {"supported", "partially", "overstated", "unsupported",
                 "not_found", "not_a_claim", "unchecked"}
+
+    def _report() -> CitationReport:
+        if run.check_report is None:
+            raise HTTPException(409, "no check report yet")
+        return run.check_report
+
+    def _passage_index():
+        rep = run.check_report
+        return {p.id: (p, chk) for chk in (rep.checks if rep else []) for p in chk.passages}
 
     def _cid(c: CitationCheck) -> str:
         return f"{c.citation.id}:{c.ref_key}"
@@ -54,9 +81,11 @@ def create_check_app(*, report: CitationReport, refs_dir: str | Path,
         """
         if chk.source_pdf is None:
             raise HTTPException(404, "source pdf unknown")
-        target = rdir / Path(chk.source_pdf).name
-        if target.is_file():
-            return target
+        rdir = Path(run.refs_dir) if run.refs_dir is not None else None
+        if rdir is not None:
+            target = rdir / Path(chk.source_pdf).name
+            if target.is_file():
+                return target
         if Path(chk.source_pdf).is_file():
             return Path(chk.source_pdf)
         raise HTTPException(404, "pdf not found")
@@ -85,15 +114,33 @@ def create_check_app(*, report: CitationReport, refs_dir: str | Path,
             "page": c.passages[0].page if c.passages else None,
         }
 
+    @app.get("/api/guard")
+    def guard():
+        s = run.settings or Settings()
+        try:
+            assert_local_only(s)
+            local, detail = True, "all components local"
+        except ConfidentialityError as e:
+            local, detail = False, str(e)
+        return {"local": local, "detail": detail, "verify_model": s.verify_model,
+                "embedding_model": s.embedding_model, "ollama_api_base": s.ollama_api_base}
+
+    @app.get("/api/run-status")
+    def run_status():
+        return {"phase": run.phase, "step": run.progress.get("step", ""),
+                "i": run.progress.get("i", 0), "n": run.progress.get("n", 0),
+                "done": run.phase == "done", "error": run.error}
+
     @app.get("/api/citations")
     def citations():
-        rows = sorted(report.checks, key=lambda c: _STATUS_ORDER.get(_status(c), 99))
-        return {"manuscript": report.manuscript, "coverage": report.coverage,
+        rep = _report()
+        rows = sorted(rep.checks, key=lambda c: _STATUS_ORDER.get(_status(c), 99))
+        return {"manuscript": rep.manuscript, "coverage": rep.coverage,
                 "checks": [_row(c) for c in rows]}
 
     @app.get("/api/page-image/{eid}")
     def page_image(eid: str):
-        pc = _passage.get(eid)
+        pc = _passage_index().get(eid)
         if pc is None:
             raise HTTPException(404, "passage not found")
         ctx, chk = pc
@@ -106,7 +153,8 @@ def create_check_app(*, report: CitationReport, refs_dir: str | Path,
 
     @app.post("/api/override")
     def override(body: OverrideBody):
-        for c in report.checks:
+        rep = _report()
+        for c in rep.checks:
             if _cid(c) == body.id:
                 if body.clear_override:
                     c.human_override = None
@@ -118,8 +166,8 @@ def create_check_app(*, report: CitationReport, refs_dir: str | Path,
                 if body.reviewed is not None:
                     c.reviewed = body.reviewed
                 c.note = body.note
-                if out_dir is not None:
-                    write_citation_sidecar(report, Path(out_dir))
+                if run.out_dir is not None:
+                    write_citation_sidecar(rep, Path(run.out_dir))
                 return {"ok": True, "status": _status(c), "reviewed": c.reviewed}
         raise HTTPException(404, "check not found")
 
@@ -128,3 +176,20 @@ def create_check_app(*, report: CitationReport, refs_dir: str | Path,
         return FileResponse(_STATIC / "index.html")
 
     return app
+
+
+def create_app(settings: Settings) -> FastAPI:
+    """Launcher app: an empty ``RunState`` so the browser can drive acquire + check."""
+    return _build_app(RunState(settings))
+
+
+def create_check_app(*, report: CitationReport, refs_dir: str | Path,
+                     out_dir: Optional[Path] = None) -> FastAPI:
+    """Audit-only app: a pre-populated ``RunState`` (phase="done"). Backward-compatible
+    wrapper over ``_build_app`` — signature and behaviour unchanged."""
+    run = RunState()
+    run.check_report = report
+    run.refs_dir = Path(refs_dir)
+    run.out_dir = Path(out_dir) if out_dir is not None else None
+    run.phase = "done"
+    return _build_app(run)
