@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<header id="topbar">
+<header id="topbar" hidden>
   <div class="brand">PROBATIO<span class="brand-sub">citation check</span></div>
   <div id="coverage" class="coverage" aria-label="coverage distribution"></div>
   <div class="counts"><span id="progress-text">—</span></div>
@@ -35,7 +35,7 @@
       <button id="check-btn">Run check</button>
     </div>
   </section>
-  <section id="queue" class="audit-only" aria-label="Citations">
+  <section id="queue" class="audit-only" aria-label="Citations" hidden>
     <div id="filters">
       <div class="presets">
         <button class="preset" data-preset="problems">Problems</button>
@@ -58,8 +58,8 @@
     </div>
     <ol id="rows" aria-label="Citation list"></ol>
   </section>
-  <section id="detail" class="audit-only" aria-label="Verdict and reasoning"></section>
-  <aside id="evidence" class="audit-only" aria-label="Source evidence"></aside>
+  <section id="detail" class="audit-only" aria-label="Verdict and reasoning" hidden></section>
+  <aside id="evidence" class="audit-only" aria-label="Source evidence" hidden></aside>
 </main>
 <div id="help-overlay" hidden></div>
 <script type="module" src="/static/app.js"></script>

@@ -317,7 +317,7 @@ function wire() {
   $("help-btn").onclick = () => toggleHelp();
 }
 async function init() {
-  wire();
+  // wire() is called once by bootstrap(); don't re-bind here (addEventListener would stack).
   const d = await api.citations();
   state.manuscript = d.manuscript; state.coverage = d.coverage || {};
   state.checks = d.checks || [];

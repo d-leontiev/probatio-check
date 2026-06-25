@@ -52,6 +52,7 @@ class RunState:
         self.phase: str = "idle"        # idle|acquiring|awaiting_refs|checking|done|error
         self.progress: dict = {"step": "", "i": 0, "n": 0}
         self.error: str = ""
+        self.task: "asyncio.Task | None" = None   # strong ref to the in-flight background job
 
 
 def _build_app(run: RunState) -> FastAPI:
@@ -147,6 +148,8 @@ def _build_app(run: RunState) -> FastAPI:
     @app.post("/api/acquire", status_code=202)
     async def acquire(body: AcquireBody):
         s = run.settings or Settings()
+        if run.phase in ("acquiring", "checking"):       # single-flight: refuse overlapping runs
+            raise HTTPException(409, "a run is already in progress")
         try:
             assert_local_only(s)
         except ConfidentialityError as e:
@@ -171,7 +174,10 @@ def _build_app(run: RunState) -> FastAPI:
                 run.phase = "awaiting_refs"
             except Exception as e:  # noqa: BLE001 - surface failure to the UI, don't crash the server
                 run.error, run.phase = str(e), "error"
-        asyncio.create_task(job())
+            finally:                                      # cancelled/interrupted before terminal -> error
+                if run.phase == "acquiring":
+                    run.phase, run.error = "error", run.error or "acquisition interrupted"
+        run.task = asyncio.create_task(job())             # retain a strong ref (loop keeps only a weak one)
         return {"phase": run.phase}
 
     @app.get("/api/references")
@@ -197,8 +203,13 @@ def _build_app(run: RunState) -> FastAPI:
             if not data.startswith(b"%PDF"):
                 continue
             name = Path(f.filename or "ref.pdf").name        # strip any path components
-            (Path(run.refs_dir) / name).write_bytes(data)
-            added += 1
+            if name in ("", ".", ".."):                      # degenerate names resolve to a dir
+                continue
+            try:
+                (Path(run.refs_dir) / name).write_bytes(data)
+                added += 1
+            except OSError:                                  # unwritable name -> skip, don't 500 the batch
+                continue
         return {"added": added}
 
     from probatio.resolve import CitationResolver
@@ -207,6 +218,8 @@ def _build_app(run: RunState) -> FastAPI:
 
     @app.post("/api/check", status_code=202)
     async def check():
+        if run.phase in ("acquiring", "checking"):       # single-flight: refuse overlapping runs
+            raise HTTPException(409, "a run is already in progress")
         s = run.settings or Settings()
         try:
             assert_local_only(s)
@@ -216,6 +229,7 @@ def _build_app(run: RunState) -> FastAPI:
             raise HTTPException(409, "no manuscript acquired yet")
         run.phase = "checking"
         run.error = ""
+        run.check_report = None        # don't serve the prior run's report during a re-check
         _set_progress("parsing", 0, 0)
         if s.ollama_api_base:
             os.environ["OLLAMA_API_BASE"] = s.ollama_api_base
@@ -234,7 +248,10 @@ def _build_app(run: RunState) -> FastAPI:
                 run.phase = "done"
             except Exception as e:  # noqa: BLE001 - surface to UI
                 run.error, run.phase = str(e), "error"
-        asyncio.create_task(job())
+            finally:                                      # cancelled/interrupted before terminal -> error
+                if run.phase == "checking":
+                    run.phase, run.error = "error", run.error or "check interrupted"
+        run.task = asyncio.create_task(job())             # retain a strong ref (loop keeps only a weak one)
         return {"phase": run.phase}
 
     @app.get("/api/citations")

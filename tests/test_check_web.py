@@ -263,6 +263,20 @@ def test_acquire_rejects_bad_manuscript(tmp_path):
     assert r.status_code == 400
 
 
+def test_single_flight_refuses_overlapping_runs(tmp_path, monkeypatch):
+    # Neuter the background job so the run stays in the synchronously-set 'acquiring' phase;
+    # a second acquire OR a check must then be refused (single-flight guard).
+    from probatio.config import Settings
+    pdf = tmp_path / "m.pdf"
+    pdf.write_bytes(b"%PDF-1.7")
+    monkeypatch.setattr(webapp.asyncio, "create_task", lambda coro: coro.close())
+    client = TestClient(create_app(Settings()))
+    assert client.post("/api/acquire", json={"manuscript_path": str(pdf)}).status_code == 202
+    assert client.get("/api/run-status").json()["phase"] == "acquiring"
+    assert client.post("/api/acquire", json={"manuscript_path": str(pdf)}).status_code == 409
+    assert client.post("/api/check").status_code == 409   # check refused while a run is in flight
+
+
 def test_drop_refs_after_acquire(tmp_path, monkeypatch):
     from probatio.config import Settings
     from probatio.models import Reference, AcquisitionReport

@@ -16,6 +16,7 @@ body{font:14px/1.5 var(--sans);color:var(--ink);background:var(--paper);
 .v-overstated{--c:var(--v-overstated)} .v-unsupported{--c:var(--v-unsupported)}
 .v-not_found{--c:var(--v-not_found)} .v-not_a_claim{--c:var(--v-not_a_claim)}
 .v-no_pdf,.v-ambiguous,.v-unresolved_marker,.v-unreadable_source,.v-unchecked{--c:var(--v-neutral)}
+.v-fetched,.v-already_present{--c:var(--v-supported)} .v-paywalled{--c:var(--v-partially)} .v-error{--c:var(--v-unsupported)}
 #topbar{display:flex;align-items:center;gap:16px;padding:10px 18px;
   border-bottom:1px solid var(--line);background:var(--panel)}
 .brand{font:600 14px var(--sans);letter-spacing:.14em}
@@ -130,6 +131,9 @@ code{font-family:var(--mono);font-size:.92em}
   border-radius:var(--radius);background:var(--panel);cursor:pointer}
 :focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 #topbar[hidden]{display:none}
+/* #queue sets display:flex via an ID rule, which beats the UA [hidden] rule — so the
+   audit panes need their own [hidden] override or they show through the launcher/refs views. */
+#queue[hidden],#detail[hidden],#evidence[hidden]{display:none}
 /* phase-aware launcher / progress / references views */
 #launcher,#progress-view,#references-view{grid-column:1 / -1;display:flex;
   align-items:flex-start;justify-content:center;overflow:auto;padding:48px 18px}
