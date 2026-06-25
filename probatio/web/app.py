@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 from typing import Optional, cast
 from fastapi import FastAPI, HTTPException
@@ -8,6 +9,7 @@ from pydantic import BaseModel
 from probatio.config import (Settings, assert_local_only, ConfidentialityError,
                              make_verify_client)
 from probatio.acquire import acquire_open_access, UnpaywallOpenAlexClient
+from probatio.check import check_pipeline
 from probatio.manuscript import PyMuPDFManuscriptParser
 from probatio.highlight import PyMuPDFHighlighter
 from probatio.models import CitationReport, CitationVerdict, CitationCheck
@@ -198,6 +200,42 @@ def _build_app(run: RunState) -> FastAPI:
             (Path(run.refs_dir) / name).write_bytes(data)
             added += 1
         return {"added": added}
+
+    from probatio.resolve import CitationResolver
+    from probatio.check_retrieval import RefRetriever
+    from probatio.verify_citations import LLMCitationVerifier
+
+    @app.post("/api/check", status_code=202)
+    async def check():
+        s = run.settings or Settings()
+        try:
+            assert_local_only(s)
+        except ConfidentialityError as e:
+            raise HTTPException(409, str(e))
+        if run.manuscript is None or run.refs_dir is None:
+            raise HTTPException(409, "no manuscript acquired yet")
+        run.phase = "checking"
+        run.error = ""
+        _set_progress("parsing", 0, 0)
+        if s.ollama_api_base:
+            os.environ["OLLAMA_API_BASE"] = s.ollama_api_base
+
+        async def job():
+            try:
+                llm = make_verify_client(s)
+                run.check_report = await check_pipeline(
+                    manuscript=run.manuscript, refs_dir=run.refs_dir,
+                    parser=PyMuPDFManuscriptParser(llm), resolver=CitationResolver(),
+                    retriever=RefRetriever(s), verifier=LLMCitationVerifier(llm),
+                    k=s.check_passages, on_progress=_set_progress)
+                run.out_dir = run.refs_dir
+                from probatio.report import write_citation_sidecar
+                write_citation_sidecar(run.check_report, run.refs_dir)
+                run.phase = "done"
+            except Exception as e:  # noqa: BLE001 - surface to UI
+                run.error, run.phase = str(e), "error"
+        asyncio.create_task(job())
+        return {"phase": run.phase}
 
     @app.get("/api/citations")
     def citations():

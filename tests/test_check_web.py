@@ -286,3 +286,48 @@ def test_drop_refs_after_acquire(tmp_path, monkeypatch):
     r = client.post("/api/drop-refs", files=files)
     assert r.status_code == 200 and r.json()["added"] == 1
     assert (pdf.with_name("m-refs") / "Good Paper.pdf").exists()
+
+
+def test_check_runs_then_citations(tmp_path, monkeypatch):
+    from probatio.config import Settings
+    import probatio.web.app as webapp
+    pdf = tmp_path / "m.pdf"
+    pdf.write_bytes(b"%PDF-1.7")
+    refs = tmp_path / "m-refs"
+    refs.mkdir()
+    rep = _report(refs)                                  # the existing 2-citation fixture
+
+    async def fake_check(*, manuscript, refs_dir, parser, resolver, retriever, verifier,
+                         k=3, on_progress=None):
+        if on_progress:
+            on_progress("done", 2, 2)
+        return rep
+    monkeypatch.setattr(webapp, "check_pipeline", fake_check)
+    client = TestClient(create_app(Settings()))
+    # seed manuscript + refs_dir via a stubbed acquire
+    monkeypatch.setattr("probatio.manuscript.PyMuPDFManuscriptParser.parse_references",
+                        lambda self, p: _aiter([]))
+
+    async def fake_acquire(r, d, *, client, max_concurrency=4, on_progress=None):
+        from probatio.models import AcquisitionReport
+        return AcquisitionReport(results=[], summary={})
+    monkeypatch.setattr(webapp, "acquire_open_access", fake_acquire)
+    monkeypatch.setattr(webapp, "UnpaywallOpenAlexClient", lambda **k: object())
+    client.post("/api/acquire", json={"manuscript_path": str(pdf), "refs_dir": str(refs)})
+    for _ in range(50):
+        if client.get("/api/run-status").json()["phase"] == "awaiting_refs":
+            break
+    r = client.post("/api/check")
+    assert r.status_code == 202
+    for _ in range(50):
+        if client.get("/api/run-status").json()["done"]:
+            break
+    body = client.get("/api/citations").json()
+    assert body["checks"][0]["verdict"] == "unsupported"     # problems-first, served from RunState
+
+
+def test_check_fail_closed(tmp_path):
+    from probatio.config import Settings
+    client = TestClient(create_app(Settings(verify_model="claude-haiku-4-5-20251001")))
+    # no manuscript set + cloud model: both should refuse; cloud guard first
+    assert client.post("/api/check").status_code in (409,)
