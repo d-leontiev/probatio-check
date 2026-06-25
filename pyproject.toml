@@ -1,0 +1,42 @@
+[project]
+name = "probatio"
+version = "0.1.0"
+description = "Probatio — a confidential, fully-local citation checker for scientific manuscripts."
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+  "paper-qa>=5",
+  "litellm>=1.40",
+  "pymupdf>=1.24",
+  "httpx>=0.27",
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+  "pydantic>=2.6",
+  "pydantic-settings>=2.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.4", "mypy>=1.10"]
+local = ["paper-qa[local]"]  # local sentence-transformers embeddings (no OpenAI key)
+
+[project.scripts]
+probatio = "probatio.check_cli:main"
+probatio-check = "probatio.check_cli:main"
+probatio-check-ui = "probatio.web.serve:main"
+probatio-acquire = "probatio.acquire_cli:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = ["integration: hits real network/LLM/paper-qa (deselected by default)"]
+addopts = "-m 'not integration'"
+
+[tool.ruff]
+line-length = 100
+
+[tool.setuptools.package-data]
+probatio = ["web/static/*"]
+
+[build-system]
+requires = ["setuptools>=77"]  # PEP 639 SPDX license expression
+build-backend = "setuptools.build_meta"

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>probatio · citation check</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand">PROBATIO<span class="brand-sub">citation check</span></div>
+  <div id="coverage" class="coverage" aria-label="coverage distribution"></div>
+  <div class="counts"><span id="progress-text">—</span></div>
+  <button id="help-btn" class="icon-btn" title="Keyboard help (?)" aria-label="Keyboard help">?</button>
+</header>
+<main id="app">
+  <section id="queue" aria-label="Citations">
+    <div id="filters">
+      <div class="presets">
+        <button class="preset" data-preset="problems">Problems</button>
+        <button class="preset" data-preset="unreviewed">Unreviewed</button>
+        <button class="preset" data-preset="all">All</button>
+      </div>
+      <div class="search-row">
+        <span class="search-ic" aria-hidden="true">⌕</span>
+        <input id="search" type="search" placeholder="Search claims…" autocomplete="off">
+      </div>
+      <div id="status-pills" class="status-pills"></div>
+      <div class="filter-row">
+        <select id="section-filter" aria-label="Section"></select>
+        <select id="sort-mode" aria-label="Sort">
+          <option value="problems">Problems first</option>
+          <option value="manuscript">Manuscript order</option>
+        </select>
+      </div>
+      <div class="progress"><div id="progress-fill"></div></div>
+    </div>
+    <ol id="rows" aria-label="Citation list"></ol>
+  </section>
+  <section id="detail" aria-label="Verdict and reasoning"></section>
+  <aside id="evidence" aria-label="Source evidence"></aside>
+</main>
+<div id="help-overlay" hidden></div>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>
