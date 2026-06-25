@@ -1,5 +1,7 @@
 # Probatio
 
+[![CI](https://github.com/d-leontiev/probatio-check/actions/workflows/ci.yml/badge.svg)](https://github.com/d-leontiev/probatio-check/actions/workflows/ci.yml)
+
 *Confidential, fully-local citation checker for scientific manuscripts.*
 
 Probatio verifies a manuscript's in-text citations against the cited reference PDFs you

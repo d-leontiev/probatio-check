@@ -12,6 +12,7 @@ dependencies = [
   "httpx>=0.27",
   "fastapi>=0.110",
   "uvicorn>=0.29",
+  "python-multipart>=0.0.9",   # FastAPI UploadFile (the audit-UI drop-refs endpoint)
   "pydantic>=2.6",
   "pydantic-settings>=2.2",
 ]
