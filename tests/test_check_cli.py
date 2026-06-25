@@ -40,3 +40,13 @@ def test_confidentiality_guard_blocks_cloud_models(tmp_path, monkeypatch):
     from probatio.check_cli import main
     with pytest.raises(ConfidentialityError):
         main(["--manuscript", str(tmp_path / "m.pdf"), "--refs", str(tmp_path / "refs")])
+
+
+def test_serve_builds_launcher_app_without_run(monkeypatch):
+    import probatio.web.serve as serve
+    built = {}
+    monkeypatch.setattr(serve, "create_app", lambda s: built.setdefault("launcher", True) or object())
+    import uvicorn
+    monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)
+    serve.main(["--port", "9999"])           # no --run
+    assert built.get("launcher") is True
