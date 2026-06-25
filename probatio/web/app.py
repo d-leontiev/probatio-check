@@ -1,10 +1,14 @@
+import asyncio
 from pathlib import Path
 from typing import Optional, cast
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from probatio.config import Settings, assert_local_only, ConfidentialityError
+from probatio.config import (Settings, assert_local_only, ConfidentialityError,
+                             make_verify_client)
+from probatio.acquire import acquire_open_access, UnpaywallOpenAlexClient
+from probatio.manuscript import PyMuPDFManuscriptParser
 from probatio.highlight import PyMuPDFHighlighter
 from probatio.models import CitationReport, CitationVerdict, CitationCheck
 
@@ -130,6 +134,54 @@ def _build_app(run: RunState) -> FastAPI:
         return {"phase": run.phase, "step": run.progress.get("step", ""),
                 "i": run.progress.get("i", 0), "n": run.progress.get("n", 0),
                 "done": run.phase == "done", "error": run.error}
+
+    class AcquireBody(BaseModel):
+        manuscript_path: str
+        refs_dir: str | None = None
+
+    def _set_progress(step: str, i: int, n: int) -> None:
+        run.progress = {"step": step, "i": i, "n": n}
+
+    @app.post("/api/acquire", status_code=202)
+    async def acquire(body: AcquireBody):
+        s = run.settings or Settings()
+        try:
+            assert_local_only(s)
+        except ConfidentialityError as e:
+            raise HTTPException(409, str(e))
+        man = Path(body.manuscript_path).expanduser()
+        if not man.is_file() or man.suffix.lower() != ".pdf":
+            raise HTTPException(400, "manuscript must be an existing .pdf path")
+        refs_dir = (Path(body.refs_dir).expanduser() if body.refs_dir
+                    else man.with_name(f"{man.stem}-refs"))
+        refs_dir.mkdir(parents=True, exist_ok=True)
+        run.manuscript, run.refs_dir, run.error = man, refs_dir, ""
+        run.phase = "acquiring"
+        _set_progress("parsing", 0, 0)
+
+        async def job():
+            try:
+                parser = PyMuPDFManuscriptParser(make_verify_client(s))
+                refs = await parser.parse_references(man)
+                client = UnpaywallOpenAlexClient(email=s.unpaywall_email)
+                run.acquire_report = await acquire_open_access(
+                    refs, refs_dir, client=client, on_progress=_set_progress)
+                run.phase = "awaiting_refs"
+            except Exception as e:  # noqa: BLE001 - surface failure to the UI, don't crash the server
+                run.error, run.phase = str(e), "error"
+        asyncio.create_task(job())
+        return {"phase": run.phase}
+
+    @app.get("/api/references")
+    def references():
+        rep = run.acquire_report
+        if rep is None:
+            raise HTTPException(409, "no acquisition yet")
+        order = {"error": 0, "not_found": 1, "paywalled": 2, "fetched": 3, "already_present": 4}
+        rows = sorted(rep.results, key=lambda r: order.get(r.status, 9))
+        return {"summary": rep.summary, "results": [
+            {"ref_key": r.ref_key, "status": r.status, "doi": r.doi,
+             "title": r.title, "pdf_path": r.pdf_path} for r in rows]}
 
     @app.get("/api/citations")
     def citations():

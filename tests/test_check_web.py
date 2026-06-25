@@ -1,11 +1,13 @@
 import fitz
 from fastapi.testclient import TestClient
+import probatio.web.app as webapp
 from probatio.web.app import create_check_app, create_app
 from probatio.config import Settings
 from probatio.web.serve import load_check_report
 from probatio.report import write_citation_sidecar
-from probatio.models import (Citation, CitationCheck, CitationReport,
-                             EvidenceContext, Reference)
+from probatio.models import (AcquisitionReport, AcquisitionResult, Citation,
+                             CitationCheck, CitationReport, EvidenceContext,
+                             Reference)
 
 
 def _pdf(path, text):
@@ -208,3 +210,50 @@ def test_launcher_serves_index_and_guard(tmp_path):
 def test_launcher_status_idle(tmp_path):
     client = TestClient(create_app(Settings()))
     assert client.get("/api/run-status").json()["phase"] == "idle"
+
+
+def test_acquire_fail_closed(tmp_path, monkeypatch):
+    from probatio.config import Settings
+    s = Settings(verify_model="claude-haiku-4-5-20251001")    # cloud -> refused
+    client = TestClient(create_app(s))
+    pdf = tmp_path / "m.pdf"
+    pdf.write_bytes(b"%PDF-1.7")
+    r = client.post("/api/acquire", json={"manuscript_path": str(pdf)})
+    assert r.status_code == 409
+
+
+def test_acquire_background_then_references(tmp_path, monkeypatch):
+    from probatio.config import Settings
+    pdf = tmp_path / "m.pdf"
+    pdf.write_bytes(b"%PDF-1.7")
+
+    async def fake_parse_refs(self, p):
+        from probatio.models import Reference
+        return [Reference(key="1", raw="1", doi="10.1/x")]
+    monkeypatch.setattr("probatio.manuscript.PyMuPDFManuscriptParser.parse_references",
+                        fake_parse_refs)
+
+    async def fake_acquire(refs, refs_dir, *, client, max_concurrency=4, on_progress=None):
+        if on_progress:
+            on_progress("fetching", 1, 1)
+        return AcquisitionReport(results=[AcquisitionResult(ref_key="1", status="paywalled")],
+                                 summary={"paywalled": 1})
+    monkeypatch.setattr(webapp, "acquire_open_access", fake_acquire)
+    monkeypatch.setattr(webapp, "UnpaywallOpenAlexClient", lambda **k: object())
+
+    client = TestClient(create_app(Settings()))
+    r = client.post("/api/acquire", json={"manuscript_path": str(pdf)})
+    assert r.status_code == 202
+    # background task runs on the TestClient event loop; poll until awaiting_refs
+    for _ in range(50):
+        if client.get("/api/run-status").json()["phase"] == "awaiting_refs":
+            break
+    refs = client.get("/api/references").json()
+    assert refs["summary"]["paywalled"] == 1 and refs["results"][0]["ref_key"] == "1"
+
+
+def test_acquire_rejects_bad_manuscript(tmp_path):
+    from probatio.config import Settings
+    client = TestClient(create_app(Settings()))
+    r = client.post("/api/acquire", json={"manuscript_path": str(tmp_path / "nope.pdf")})
+    assert r.status_code == 400
