@@ -1,6 +1,7 @@
 import pytest
 from probatio.check import check_pipeline
-from probatio.models import Citation, CitationCheck, EvidenceContext
+from probatio.models import Citation, Reference, CitationCheck, EvidenceContext
+from pathlib import Path
 
 
 class StubParser:
@@ -58,3 +59,36 @@ async def test_pipeline_buckets_every_citation(tmp_path):
     assert by_id["c5"].resolution == "unreadable_source"                         # retriever raised
     assert report.coverage == {
         "supported": 1, "not_found": 1, "not_a_claim": 1, "no_pdf": 1, "unreadable_source": 1}
+
+
+class _P:
+    async def parse(self, m):
+        return ([Citation(id="c1", claim="x", ref_keys=["1"])],
+                [Reference(key="1", raw="1")])
+
+
+class _R:
+    async def resolve(self, cits, refs, refs_dir):
+        return [CitationCheck(citation=cits[0], ref_key="1", resolution="resolved",
+                              source_pdf=Path("/x/a.pdf"))]
+
+
+class _Ret:
+    async def passages_for(self, pdf, claim, k):
+        return [EvidenceContext(id="e", paper_id="a", snippet="x")]
+
+
+class _V:
+    async def judge(self, claim, passages):
+        return ("supported", "", 1.0)
+
+
+@pytest.mark.asyncio
+async def test_check_pipeline_emits_progress(tmp_path):
+    seen = []
+    await check_pipeline(manuscript=tmp_path / "m.pdf", refs_dir=tmp_path,
+                         parser=_P(), resolver=_R(), retriever=_Ret(), verifier=_V(),
+                         on_progress=lambda step, i, n: seen.append((step, i, n)))
+    steps = [s for s, _i, _n in seen]
+    assert steps[0] == "parsing" and "resolving" in steps
+    assert ("checking", 1, 1) in seen and seen[-1] == ("done", 1, 1)
